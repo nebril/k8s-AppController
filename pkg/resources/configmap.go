@@ -15,7 +15,9 @@
 package resources
 
 import (
+	"fmt"
 	"log"
+	"reflect"
 
 	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/pkg/api/v1"
@@ -45,18 +47,25 @@ func (c ConfigMap) Key() string {
 	return configMapKey(c.ConfigMap.Name)
 }
 
-func configMapStatus(c corev1.ConfigMapInterface, name string) (interfaces.ResourceStatus, error) {
-	_, err := c.Get(name)
+// Status returns ConfigMap status. interfaces.ResourceReady means that its dependencies can be created
+func (c ConfigMap) Status(meta map[string]string) (interfaces.ResourceStatus, error) {
+	cm, err := c.Client.Get(c.ConfigMap.Name)
 	if err != nil {
 		return interfaces.ResourceError, err
+	}
+
+	if !c.EqualToDefinition(cm) {
+		return interfaces.ResourceWaitingForUpgrade, fmt.Errorf(string(interfaces.ResourceWaitingForUpgrade))
 	}
 
 	return interfaces.ResourceReady, nil
 }
 
-// Status returns ConfigMap status. interfaces.ResourceReady means that its dependencies can be created
-func (c ConfigMap) Status(meta map[string]string) (interfaces.ResourceStatus, error) {
-	return configMapStatus(c.Client, c.ConfigMap.Name)
+// EqualToDefinition checks if definition in object is compatible with provided object
+func (c ConfigMap) EqualToDefinition(configmap interface{}) bool {
+	cm := configmap.(*v1.ConfigMap)
+
+	return reflect.DeepEqual(cm.Data, c.Definition.ConfigMap.Data) && reflect.DeepEqual(cm.ObjectMeta, c.Definition.ConfigMap.ObjectMeta)
 }
 
 func (c ConfigMap) Create() error {
@@ -76,8 +85,17 @@ func (c ConfigMap) NameMatches(def client.ResourceDefinition, name string) bool 
 	return def.ConfigMap != nil && def.ConfigMap.Name == name
 }
 
-func NewConfigMap(c *v1.ConfigMap, client corev1.ConfigMapInterface, meta map[string]interface{}) interfaces.Resource {
-	return report.SimpleReporter{BaseResource: ConfigMap{Base: Base{meta}, ConfigMap: c, Client: client}}
+func NewConfigMap(r client.ResourceDefinition, client corev1.ConfigMapInterface) interfaces.Resource {
+	return report.SimpleReporter{
+		BaseResource: ConfigMap{
+			Base: Base{
+				Definition: r,
+				meta:       r.Meta,
+			},
+			ConfigMap: r.ConfigMap,
+			Client:    client,
+		},
+	}
 }
 
 func NewExistingConfigMap(name string, client corev1.ConfigMapInterface) interfaces.Resource {
@@ -86,7 +104,7 @@ func NewExistingConfigMap(name string, client corev1.ConfigMapInterface) interfa
 
 // New returns a new object wrapped as Resource
 func (c ConfigMap) New(def client.ResourceDefinition, ci client.Interface) interfaces.Resource {
-	return NewConfigMap(def.ConfigMap, ci.ConfigMaps(), def.Meta)
+	return NewConfigMap(def, ci.ConfigMaps())
 }
 
 // NewExisting returns a new object based on existing one wrapped as Resource
@@ -100,7 +118,12 @@ func (c ExistingConfigMap) Key() string {
 
 // Status returns ConfigMap status. interfaces.ResourceReady means that its dependencies can be created
 func (c ExistingConfigMap) Status(meta map[string]string) (interfaces.ResourceStatus, error) {
-	return configMapStatus(c.Client, c.Name)
+	_, err := c.Client.Get(c.Name)
+	if err != nil {
+		return interfaces.ResourceError, err
+	}
+
+	return interfaces.ResourceReady, nil
 }
 
 func (c ExistingConfigMap) Create() error {

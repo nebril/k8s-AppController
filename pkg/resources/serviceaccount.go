@@ -15,7 +15,9 @@
 package resources
 
 import (
+	"fmt"
 	"log"
+	"reflect"
 
 	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/pkg/api/v1"
@@ -45,17 +47,24 @@ func (c ServiceAccount) Key() string {
 	return serviceAccountKey(c.ServiceAccount.Name)
 }
 
-func serviceAccountStatus(c corev1.ServiceAccountInterface, name string) (interfaces.ResourceStatus, error) {
-	_, err := c.Get(name)
+func (c ServiceAccount) Status(meta map[string]string) (interfaces.ResourceStatus, error) {
+	sa, err := c.Client.Get(c.ServiceAccount.Name)
 	if err != nil {
 		return interfaces.ResourceError, err
+	}
+
+	if !c.EqualToDefinition(sa) {
+		return interfaces.ResourceWaitingForUpgrade, fmt.Errorf(string(interfaces.ResourceWaitingForUpgrade))
 	}
 
 	return interfaces.ResourceReady, nil
 }
 
-func (c ServiceAccount) Status(meta map[string]string) (interfaces.ResourceStatus, error) {
-	return serviceAccountStatus(c.Client, c.ServiceAccount.Name)
+// EqualToDefinition checks if definition in object is compatible with provided object
+func (c ServiceAccount) EqualToDefinition(serviceAccountiface interface{}) bool {
+	serviceAccount := serviceAccountiface.(*v1.ServiceAccount)
+
+	return reflect.DeepEqual(serviceAccount.ObjectMeta, c.ServiceAccount.ObjectMeta) && reflect.DeepEqual(serviceAccount.Secrets, c.ServiceAccount.Secrets) && reflect.DeepEqual(serviceAccount.ImagePullSecrets, c.ServiceAccount.ImagePullSecrets)
 }
 
 func (c ServiceAccount) Create() error {
@@ -75,8 +84,17 @@ func (c ServiceAccount) NameMatches(def client.ResourceDefinition, name string) 
 	return def.ServiceAccount != nil && def.ServiceAccount.Name == name
 }
 
-func NewServiceAccount(c *v1.ServiceAccount, client corev1.ServiceAccountInterface, meta map[string]interface{}) interfaces.Resource {
-	return report.SimpleReporter{BaseResource: ServiceAccount{Base: Base{meta}, ServiceAccount: c, Client: client}}
+func NewServiceAccount(def client.ResourceDefinition, client corev1.ServiceAccountInterface) interfaces.Resource {
+	return report.SimpleReporter{
+		BaseResource: ServiceAccount{
+			Base: Base{
+				Definition: def,
+				meta:       def.Meta,
+			},
+			ServiceAccount: def.ServiceAccount,
+			Client:         client,
+		},
+	}
 }
 
 func NewExistingServiceAccount(name string, client corev1.ServiceAccountInterface) interfaces.Resource {
@@ -85,7 +103,7 @@ func NewExistingServiceAccount(name string, client corev1.ServiceAccountInterfac
 
 // New returns a new object wrapped as Resource
 func (c ServiceAccount) New(def client.ResourceDefinition, ci client.Interface) interfaces.Resource {
-	return NewServiceAccount(def.ServiceAccount, ci.ServiceAccounts(), def.Meta)
+	return NewServiceAccount(def, ci.ServiceAccounts())
 }
 
 // NewExisting returns a new object based on existing one wrapped as Resource
@@ -98,7 +116,12 @@ func (c ExistingServiceAccount) Key() string {
 }
 
 func (c ExistingServiceAccount) Status(meta map[string]string) (interfaces.ResourceStatus, error) {
-	return serviceAccountStatus(c.Client, c.Name)
+	_, err := c.Client.Get(c.Name)
+	if err != nil {
+		return interfaces.ResourceError, err
+	}
+
+	return interfaces.ResourceReady, nil
 }
 
 func (c ExistingServiceAccount) Create() error {

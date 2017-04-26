@@ -15,7 +15,9 @@
 package resources
 
 import (
+	"fmt"
 	"log"
+	"reflect"
 
 	"github.com/Mirantis/k8s-AppController/pkg/client"
 	"github.com/Mirantis/k8s-AppController/pkg/interfaces"
@@ -37,12 +39,8 @@ func daemonSetKey(name string) string {
 	return "daemonset/" + name
 }
 
-func daemonSetStatus(d v1beta1.DaemonSetInterface, name string) (interfaces.ResourceStatus, error) {
-	daemonSet, err := d.Get(name)
-	if err != nil {
-		return interfaces.ResourceError, err
-	}
-	if daemonSet.Status.CurrentNumberScheduled == daemonSet.Status.DesiredNumberScheduled {
+func daemonSetStatus(d *extbeta1.DaemonSet) (interfaces.ResourceStatus, error) {
+	if d.Status.CurrentNumberScheduled == d.Status.DesiredNumberScheduled {
 		return interfaces.ResourceReady, nil
 	}
 	return interfaces.ResourceNotReady, nil
@@ -55,7 +53,22 @@ func (d DaemonSet) Key() string {
 
 // Status returns DaemonSet status. interfaces.ResourceReady means that its dependencies can be created
 func (d DaemonSet) Status(meta map[string]string) (interfaces.ResourceStatus, error) {
-	return daemonSetStatus(d.Client, d.DaemonSet.Name)
+	ds, err := d.Client.Get(d.DaemonSet.Name)
+	if err != nil {
+		return interfaces.ResourceError, err
+	}
+
+	if !d.EqualToDefinition(ds) {
+		return interfaces.ResourceWaitingForUpgrade, fmt.Errorf(string(interfaces.ResourceWaitingForUpgrade))
+	}
+	return daemonSetStatus(ds)
+}
+
+// EqualToDefinition returns whether the resource has the same values as provided object
+func (d DaemonSet) EqualToDefinition(daemonset interface{}) bool {
+	ds := daemonset.(*extbeta1.DaemonSet)
+
+	return reflect.DeepEqual(ds.ObjectMeta, d.DaemonSet.ObjectMeta) && reflect.DeepEqual(ds.Spec, d.DaemonSet.Spec)
 }
 
 // Create looks for DaemonSet in K8s and creates it if not present
@@ -81,7 +94,7 @@ func (d DaemonSet) NameMatches(def client.ResourceDefinition, name string) bool 
 
 // New returns new DaemonSet based on resource definition
 func (d DaemonSet) New(def client.ResourceDefinition, c client.Interface) interfaces.Resource {
-	return NewDaemonSet(def.DaemonSet, c.DaemonSets(), def.Meta)
+	return NewDaemonSet(def, c.DaemonSets())
 }
 
 // NewExisting returns new ExistingDaemonSet based on resource definition
@@ -90,8 +103,17 @@ func (d DaemonSet) NewExisting(name string, c client.Interface) interfaces.Resou
 }
 
 // NewDaemonSet is a constructor
-func NewDaemonSet(daemonset *extbeta1.DaemonSet, client v1beta1.DaemonSetInterface, meta map[string]interface{}) interfaces.Resource {
-	return report.SimpleReporter{BaseResource: DaemonSet{Base: Base{meta}, DaemonSet: daemonset, Client: client}}
+func NewDaemonSet(def client.ResourceDefinition, client v1beta1.DaemonSetInterface) interfaces.Resource {
+	return report.SimpleReporter{
+		BaseResource: DaemonSet{
+			Base: Base{
+				Definition: def,
+				meta:       def.Meta,
+			},
+			DaemonSet: def.DaemonSet,
+			Client:    client,
+		},
+	}
 }
 
 // ExistingDaemonSet is a wrapper for K8s DaemonSet object which is deployed on a cluster before AppController
@@ -108,7 +130,12 @@ func (d ExistingDaemonSet) Key() string {
 
 // Status returns DaemonSet status. interfaces.ResourceReady means that its dependencies can be created
 func (d ExistingDaemonSet) Status(meta map[string]string) (interfaces.ResourceStatus, error) {
-	return daemonSetStatus(d.Client, d.Name)
+	ds, err := d.Client.Get(d.Name)
+	if err != nil {
+		return interfaces.ResourceError, err
+	}
+
+	return daemonSetStatus(ds)
 }
 
 // Create looks for existing DaemonSet and returns error if there is no such DaemonSet

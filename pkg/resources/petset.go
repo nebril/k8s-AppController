@@ -15,7 +15,9 @@
 package resources
 
 import (
+	"fmt"
 	"log"
+	"reflect"
 
 	"github.com/Mirantis/k8s-AppController/pkg/client"
 	appsalpha1 "github.com/Mirantis/k8s-AppController/pkg/client/petsets/apis/apps/v1alpha1"
@@ -32,12 +34,8 @@ type PetSet struct {
 	APIClient client.Interface
 }
 
-func petsetStatus(p v1alpha1.PetSetInterface, name string, apiClient client.Interface) (interfaces.ResourceStatus, error) {
+func petsetStatus(ps *appsalpha1.PetSet, apiClient client.Interface) (interfaces.ResourceStatus, error) {
 	// Use label from petset spec to get needed pods
-	ps, err := p.Get(name)
-	if err != nil {
-		return interfaces.ResourceError, err
-	}
 	return podsStateFromLabels(apiClient, ps.Spec.Template.ObjectMeta.Labels)
 }
 
@@ -67,7 +65,22 @@ func (p PetSet) Delete() error {
 
 // Status returns PetSet status. interfaces.ResourceReady is regarded as sufficient for it's dependencies to be created.
 func (p PetSet) Status(meta map[string]string) (interfaces.ResourceStatus, error) {
-	return petsetStatus(p.Client, p.PetSet.Name, p.APIClient)
+	petset, err := p.Client.Get(p.PetSet.Name)
+	if err != nil {
+		return interfaces.ResourceError, err
+	}
+
+	if !p.EqualToDefinition(petset) {
+		return interfaces.ResourceWaitingForUpgrade, fmt.Errorf(string(interfaces.ResourceWaitingForUpgrade))
+	}
+
+	return petsetStatus(petset, p.APIClient)
+}
+
+func (p PetSet) EqualToDefinition(ps interface{}) bool {
+	petset := ps.(*appsalpha1.PetSet)
+
+	return reflect.DeepEqual(petset.ObjectMeta, p.PetSet.ObjectMeta) && reflect.DeepEqual(petset.Spec, p.PetSet.Spec)
 }
 
 // NameMatches gets resource definition and a name and checks if
@@ -78,7 +91,7 @@ func (p PetSet) NameMatches(def client.ResourceDefinition, name string) bool {
 
 // New returns new PetSet based on resource definition
 func (p PetSet) New(def client.ResourceDefinition, c client.Interface) interfaces.Resource {
-	return NewPetSet(def.PetSet, c.PetSets(), c, def.Meta)
+	return NewPetSet(def, c)
 }
 
 // NewExisting returns new ExistingPetSet based on resource definition
@@ -87,8 +100,18 @@ func (p PetSet) NewExisting(name string, c client.Interface) interfaces.Resource
 }
 
 // NewPetSet is a constructor
-func NewPetSet(petset *appsalpha1.PetSet, client v1alpha1.PetSetInterface, apiClient client.Interface, meta map[string]interface{}) interfaces.Resource {
-	return report.SimpleReporter{BaseResource: PetSet{Base: Base{meta}, PetSet: petset, Client: client, APIClient: apiClient}}
+func NewPetSet(def client.ResourceDefinition, c client.Interface) interfaces.Resource {
+	return report.SimpleReporter{
+		BaseResource: PetSet{
+			Base: Base{
+				Definition: def,
+				meta:       def.Meta,
+			},
+			PetSet:    def.PetSet,
+			Client:    c.PetSets(),
+			APIClient: c,
+		},
+	}
 }
 
 // ExistingPetSet is a wrapper for K8s PetSet object which is meant to already be in a cluster bofer AppController execution
@@ -111,7 +134,12 @@ func (p ExistingPetSet) Create() error {
 
 // Status returns PetSet status. interfaces.ResourceReady is regarded as sufficient for it's dependencies to be created.
 func (p ExistingPetSet) Status(meta map[string]string) (interfaces.ResourceStatus, error) {
-	return petsetStatus(p.Client, p.Name, p.APIClient)
+	petset, err := p.Client.Get(p.Name)
+	if err != nil {
+		return interfaces.ResourceError, err
+	}
+
+	return petsetStatus(petset, p.APIClient)
 }
 
 // Delete deletes PetSet from the cluster

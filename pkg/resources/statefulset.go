@@ -15,7 +15,9 @@
 package resources
 
 import (
+	"fmt"
 	"log"
+	"reflect"
 
 	"k8s.io/client-go/kubernetes/typed/apps/v1beta1"
 	appsbeta1 "k8s.io/client-go/pkg/apis/apps/v1beta1"
@@ -31,15 +33,6 @@ type StatefulSet struct {
 	StatefulSet *appsbeta1.StatefulSet
 	Client      v1beta1.StatefulSetInterface
 	APIClient   client.Interface
-}
-
-func statefulsetStatus(p v1beta1.StatefulSetInterface, name string, apiClient client.Interface) (interfaces.ResourceStatus, error) {
-	// Use label from statefulset spec to get needed pods
-	ps, err := p.Get(name)
-	if err != nil {
-		return interfaces.ResourceError, err
-	}
-	return podsStateFromLabels(apiClient, ps.Spec.Template.ObjectMeta.Labels)
 }
 
 func statefulsetKey(name string) string {
@@ -68,7 +61,22 @@ func (p StatefulSet) Delete() error {
 
 // Status returns StatefulSet status. interfaces.ResourceReady is regarded as sufficient for it's dependencies to be created.
 func (p StatefulSet) Status(meta map[string]string) (interfaces.ResourceStatus, error) {
-	return statefulsetStatus(p.Client, p.StatefulSet.Name, p.APIClient)
+	ps, err := p.Client.Get(p.StatefulSet.Name)
+	if err != nil {
+		return interfaces.ResourceError, err
+	}
+
+	if !p.EqualToDefinition(ps) {
+		return interfaces.ResourceWaitingForUpgrade, fmt.Errorf(string(interfaces.ResourceWaitingForUpgrade))
+	}
+	return podsStateFromLabels(p.APIClient, ps.Spec.Template.ObjectMeta.Labels)
+}
+
+// EqualToDefinition checks if definition in object is compatible with provided object
+func (s StatefulSet) EqualToDefinition(statefulSetiface interface{}) bool {
+	statefulSet := statefulSetiface.(*appsbeta1.StatefulSet)
+
+	return reflect.DeepEqual(statefulSet.ObjectMeta, s.StatefulSet.ObjectMeta) && reflect.DeepEqual(statefulSet.Spec, s.StatefulSet.Spec)
 }
 
 // NameMatches gets resource definition and a name and checks if
@@ -79,7 +87,7 @@ func (p StatefulSet) NameMatches(def client.ResourceDefinition, name string) boo
 
 // New returns new StatefulSet based on resource definition
 func (p StatefulSet) New(def client.ResourceDefinition, c client.Interface) interfaces.Resource {
-	return NewStatefulSet(def.StatefulSet, c.StatefulSets(), c, def.Meta)
+	return NewStatefulSet(def, c)
 }
 
 // NewExisting returns new ExistingStatefulSet based on resource definition
@@ -88,8 +96,18 @@ func (p StatefulSet) NewExisting(name string, c client.Interface) interfaces.Res
 }
 
 // NewStatefulSet is a constructor
-func NewStatefulSet(statefulset *appsbeta1.StatefulSet, client v1beta1.StatefulSetInterface, apiClient client.Interface, meta map[string]interface{}) interfaces.Resource {
-	return report.SimpleReporter{BaseResource: StatefulSet{Base: Base{meta}, StatefulSet: statefulset, Client: client, APIClient: apiClient}}
+func NewStatefulSet(def client.ResourceDefinition, apiClient client.Interface) interfaces.Resource {
+	return report.SimpleReporter{
+		BaseResource: StatefulSet{
+			Base: Base{
+				Definition: def,
+				meta:       def.Meta,
+			},
+			StatefulSet: def.StatefulSet,
+			Client:      apiClient.StatefulSets(),
+			APIClient:   apiClient,
+		},
+	}
 }
 
 // ExistingStatefulSet is a wrapper for K8s StatefulSet object which is meant to already be in a cluster bofer AppController execution
@@ -112,7 +130,11 @@ func (p ExistingStatefulSet) Create() error {
 
 // Status returns StatefulSet status. interfaces.ResourceReady is regarded as sufficient for it's dependencies to be created.
 func (p ExistingStatefulSet) Status(meta map[string]string) (interfaces.ResourceStatus, error) {
-	return statefulsetStatus(p.Client, p.Name, p.APIClient)
+	ps, err := p.Client.Get(p.Name)
+	if err != nil {
+		return interfaces.ResourceError, err
+	}
+	return podsStateFromLabels(p.APIClient, ps.Spec.Template.ObjectMeta.Labels)
 }
 
 // Delete deletes StatefulSet from the cluster

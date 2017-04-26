@@ -19,9 +19,10 @@ import "github.com/Mirantis/k8s-AppController/pkg/client"
 type ResourceStatus string
 
 const (
-	ResourceReady    ResourceStatus = "ready"
-	ResourceNotReady ResourceStatus = "not ready"
-	ResourceError    ResourceStatus = "error"
+	ResourceReady             ResourceStatus = "ready"
+	ResourceNotReady          ResourceStatus = "not ready"
+	ResourceError             ResourceStatus = "error"
+	ResourceWaitingForUpgrade ResourceStatus = "waiting for upgrade"
 )
 
 // BaseResource is an interface for AppController supported resources
@@ -33,6 +34,7 @@ type BaseResource interface {
 	Delete() error
 	Meta(string) interface{}
 	StatusIsCacheable(meta map[string]string) bool
+	EqualToDefinition(interface{}) bool
 }
 
 // DependencyReport is a report of a single dependency of a node in graph

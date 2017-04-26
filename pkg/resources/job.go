@@ -15,7 +15,9 @@
 package resources
 
 import (
+	"fmt"
 	"log"
+	"reflect"
 
 	"github.com/Mirantis/k8s-AppController/pkg/client"
 	"github.com/Mirantis/k8s-AppController/pkg/interfaces"
@@ -35,12 +37,7 @@ func jobKey(name string) string {
 	return "job/" + name
 }
 
-func jobStatus(j batchv1.JobInterface, name string) (interfaces.ResourceStatus, error) {
-	job, err := j.Get(name)
-	if err != nil {
-		return interfaces.ResourceError, err
-	}
-
+func jobStatus(job *v1.Job) (interfaces.ResourceStatus, error) {
 	for _, cond := range job.Status.Conditions {
 		if cond.Type == "Complete" && cond.Status == "True" {
 			return interfaces.ResourceReady, nil
@@ -57,7 +54,23 @@ func (j Job) Key() string {
 
 // Status returns job status
 func (j Job) Status(meta map[string]string) (interfaces.ResourceStatus, error) {
-	return jobStatus(j.Client, j.Job.Name)
+	job, err := j.Client.Get(j.Job.Name)
+	if err != nil {
+		return interfaces.ResourceError, err
+	}
+
+	if !j.EqualToDefinition(job) {
+		return interfaces.ResourceWaitingForUpgrade, fmt.Errorf(string(interfaces.ResourceWaitingForUpgrade))
+	}
+
+	return jobStatus(job)
+}
+
+// EqualToDefinition checks if definition in object is compatible with provided object
+func (j Job) EqualToDefinition(jobiface interface{}) bool {
+	job := jobiface.(*v1.Job)
+
+	return reflect.DeepEqual(job.ObjectMeta, j.Job.ObjectMeta) && reflect.DeepEqual(job.Spec, j.Job.Spec)
 }
 
 // Create creates k8s job object
@@ -83,7 +96,7 @@ func (j Job) NameMatches(def client.ResourceDefinition, name string) bool {
 
 // New returns new Job on resource definition
 func (j Job) New(def client.ResourceDefinition, c client.Interface) interfaces.Resource {
-	return NewJob(def.Job, c.Jobs(), def.Meta)
+	return NewJob(def, c.Jobs())
 }
 
 // NewExisting returns new ExistingJob based on resource definition
@@ -91,8 +104,17 @@ func (j Job) NewExisting(name string, c client.Interface) interfaces.Resource {
 	return NewExistingJob(name, c.Jobs())
 }
 
-func NewJob(job *v1.Job, client batchv1.JobInterface, meta map[string]interface{}) interfaces.Resource {
-	return report.SimpleReporter{BaseResource: Job{Base: Base{meta}, Job: job, Client: client}}
+func NewJob(def client.ResourceDefinition, client batchv1.JobInterface) interfaces.Resource {
+	return report.SimpleReporter{
+		BaseResource: Job{
+			Base: Base{
+				Definition: def,
+				meta:       def.Meta,
+			},
+			Job:    def.Job,
+			Client: client,
+		},
+	}
 }
 
 type ExistingJob struct {
@@ -107,7 +129,12 @@ func (j ExistingJob) Key() string {
 
 // Status returns job status
 func (j ExistingJob) Status(meta map[string]string) (interfaces.ResourceStatus, error) {
-	return jobStatus(j.Client, j.Name)
+	job, err := j.Client.Get(j.Name)
+	if err != nil {
+		return interfaces.ResourceError, err
+	}
+
+	return jobStatus(job)
 }
 
 func (j ExistingJob) Create() error {

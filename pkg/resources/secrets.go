@@ -15,7 +15,9 @@
 package resources
 
 import (
+	"fmt"
 	"log"
+	"reflect"
 
 	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/pkg/api/v1"
@@ -49,18 +51,25 @@ func (s ExistingSecret) Key() string {
 	return secretKey(s.Name)
 }
 
-func secretStatus(s corev1.SecretInterface, name string) (interfaces.ResourceStatus, error) {
-	_, err := s.Get(name)
+// Status returns interfaces.ResourceReady if the secret is available in cluster
+func (s Secret) Status(_ map[string]string) (interfaces.ResourceStatus, error) {
+	secret, err := s.Client.Get(s.Secret.Name)
 	if err != nil {
 		return interfaces.ResourceError, err
+	}
+
+	if !s.EqualToDefinition(secret) {
+		return interfaces.ResourceWaitingForUpgrade, fmt.Errorf(string(interfaces.ResourceWaitingForUpgrade))
 	}
 
 	return interfaces.ResourceReady, nil
 }
 
-// Status returns interfaces.ResourceReady if the secret is available in cluster
-func (s Secret) Status(meta map[string]string) (interfaces.ResourceStatus, error) {
-	return secretStatus(s.Client, s.Secret.Name)
+// EqualToDefinition checks if definition in object is compatible with provided object
+func (s Secret) EqualToDefinition(secretiface interface{}) bool {
+	secret := secretiface.(*v1.Secret)
+
+	return reflect.DeepEqual(secret.ObjectMeta, s.Secret.ObjectMeta) && reflect.DeepEqual(secret.Data, s.Secret.Data) && reflect.DeepEqual(secret.StringData, s.Secret.StringData) && secret.Type == s.Secret.Type
 }
 
 func (s Secret) Create() error {
@@ -80,8 +89,17 @@ func (s Secret) NameMatches(def client.ResourceDefinition, name string) bool {
 	return def.Secret != nil && def.Secret.Name == name
 }
 
-func NewSecret(s *v1.Secret, client corev1.SecretInterface, meta map[string]interface{}) interfaces.Resource {
-	return report.SimpleReporter{BaseResource: Secret{Base: Base{meta}, Secret: s, Client: client}}
+func NewSecret(def client.ResourceDefinition, client corev1.SecretInterface) interfaces.Resource {
+	return report.SimpleReporter{
+		BaseResource: Secret{
+			Base: Base{
+				Definition: def,
+				meta:       def.Meta,
+			},
+			Secret: def.Secret,
+			Client: client,
+		},
+	}
 }
 
 func NewExistingSecret(name string, client corev1.SecretInterface) interfaces.Resource {
@@ -89,7 +107,7 @@ func NewExistingSecret(name string, client corev1.SecretInterface) interfaces.Re
 }
 
 func (s Secret) New(def client.ResourceDefinition, ci client.Interface) interfaces.Resource {
-	return NewSecret(def.Secret, ci.Secrets(), def.Meta)
+	return NewSecret(def, ci.Secrets())
 }
 
 func (s Secret) NewExisting(name string, ci client.Interface) interfaces.Resource {
@@ -98,7 +116,12 @@ func (s Secret) NewExisting(name string, ci client.Interface) interfaces.Resourc
 
 // Status returns interfaces.ResourceReady if the secret is available in cluster
 func (s ExistingSecret) Status(meta map[string]string) (interfaces.ResourceStatus, error) {
-	return secretStatus(s.Client, s.Name)
+	_, err := s.Client.Get(s.Name)
+	if err != nil {
+		return interfaces.ResourceError, err
+	}
+
+	return interfaces.ResourceReady, nil
 }
 
 func (s ExistingSecret) Create() error {

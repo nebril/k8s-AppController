@@ -16,7 +16,9 @@ package resources
 
 import (
 	"errors"
+	"fmt"
 	"log"
+	"reflect"
 
 	"k8s.io/client-go/kubernetes/typed/extensions/v1beta1"
 	extbeta1 "k8s.io/client-go/pkg/apis/extensions/v1beta1"
@@ -37,12 +39,7 @@ func deploymentKey(name string) string {
 	return "deployment/" + name
 }
 
-func deploymentStatus(d v1beta1.DeploymentInterface, name string) (interfaces.ResourceStatus, error) {
-	deployment, err := d.Get(name)
-	if err != nil {
-		return interfaces.ResourceError, err
-	}
-
+func deploymentStatus(deployment *extbeta1.Deployment) (interfaces.ResourceStatus, error) {
 	if deployment.Status.UpdatedReplicas >= *deployment.Spec.Replicas && deployment.Status.AvailableReplicas >= *deployment.Spec.Replicas {
 		return interfaces.ResourceReady, nil
 	}
@@ -56,7 +53,22 @@ func (d Deployment) Key() string {
 
 // Status returns Deployment status. interfaces.ResourceReady means that its dependencies can be created
 func (d Deployment) Status(meta map[string]string) (interfaces.ResourceStatus, error) {
-	return deploymentStatus(d.Client, d.Deployment.Name)
+	deployment, err := d.Client.Get(d.Deployment.Name)
+	if err != nil {
+		return interfaces.ResourceError, err
+	}
+
+	if !d.EqualToDefinition(deployment) {
+		return interfaces.ResourceWaitingForUpgrade, fmt.Errorf(string(interfaces.ResourceWaitingForUpgrade))
+	}
+
+	return deploymentStatus(deployment)
+}
+
+func (d Deployment) EqualToDefinition(deployment interface{}) bool {
+	dep := deployment.(*extbeta1.Deployment)
+
+	return reflect.DeepEqual(dep.ObjectMeta, d.Deployment.ObjectMeta) && reflect.DeepEqual(dep.Spec, d.Deployment.Spec)
 }
 
 // Create looks for Deployment in K8s and creates it if not present
@@ -86,7 +98,8 @@ func (d Deployment) NameMatches(def client.ResourceDefinition, name string) bool
 
 // New returns new Deployment based on resource definition
 func (d Deployment) New(def client.ResourceDefinition, c client.Interface) interfaces.Resource {
-	return NewDeployment(def.Deployment, c.Deployments(), def.Meta)
+	//TODO: add ResDef to Base object in all resources
+	return NewDeployment(def, c.Deployments())
 }
 
 // NewExisting returns new ExistingDeployment based on resource definition
@@ -95,8 +108,17 @@ func (d Deployment) NewExisting(name string, c client.Interface) interfaces.Reso
 }
 
 // NewDeployment is a constructor
-func NewDeployment(deployment *extbeta1.Deployment, client v1beta1.DeploymentInterface, meta map[string]interface{}) interfaces.Resource {
-	return report.SimpleReporter{BaseResource: Deployment{Base: Base{meta}, Deployment: deployment, Client: client}}
+func NewDeployment(def client.ResourceDefinition, client v1beta1.DeploymentInterface) interfaces.Resource {
+	return report.SimpleReporter{
+		BaseResource: Deployment{
+			Base: Base{
+				Definition: def,
+				meta:       def.Meta,
+			},
+			Deployment: def.Deployment,
+			Client:     client,
+		},
+	}
 }
 
 // ExistingDeployment is a wrapper for K8s Deployment object which is deployed on a cluster before AppController
@@ -118,7 +140,11 @@ func (d ExistingDeployment) Key() string {
 
 // Status returns Deployment status. interfaces.ResourceReady means that its dependencies can be created
 func (d ExistingDeployment) Status(meta map[string]string) (interfaces.ResourceStatus, error) {
-	return deploymentStatus(d.Client, d.Name)
+	deployment, err := d.Client.Get(d.Name)
+	if err != nil {
+		return interfaces.ResourceError, err
+	}
+	return deploymentStatus(deployment)
 }
 
 // Create looks for existing Deployment and returns error if there is no such Deployment

@@ -336,13 +336,13 @@ func BuildDependencyGraph(c client.Interface, sel labels.Selector) (DependencyGr
 		} else if r.PetSet != nil {
 			resource = resources.NewPetSet(r.PetSet, c.PetSets(), c, r.Meta)
 		} else if r.DaemonSet != nil {
-			resource = resources.NewDaemonSet(r.DaemonSet, c.DaemonSets(), r.Meta)
+			resource = resources.NewDaemonSet(r, c.DaemonSets())
 		} else if r.ConfigMap != nil {
-			resource = resources.NewConfigMap(r.ConfigMap, c.ConfigMaps(), r.Meta)
+			resource = resources.NewConfigMap(r, c.ConfigMaps())
 		} else if r.Secret != nil {
 			resource = resources.NewSecret(r.Secret, c.Secrets(), r.Meta)
 		} else if r.Deployment != nil {
-			resource = resources.NewDeployment(r.Deployment, c.Deployments(), r.Meta)
+			resource = resources.NewDeployment(r, c.Deployments())
 		} else if r.PersistentVolumeClaim != nil {
 			resource = resources.NewPersistentVolumeClaim(r.PersistentVolumeClaim, c.PersistentVolumeClaims(), r.Meta)
 		} else if r.ServiceAccount != nil {

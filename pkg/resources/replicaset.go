@@ -17,6 +17,7 @@ package resources
 import (
 	"fmt"
 	"log"
+	"reflect"
 
 	"k8s.io/client-go/kubernetes/typed/extensions/v1beta1"
 	extbeta1 "k8s.io/client-go/pkg/apis/extensions/v1beta1"
@@ -34,11 +35,7 @@ type ReplicaSet struct {
 	Client     v1beta1.ReplicaSetInterface
 }
 
-func replicaSetStatus(r v1beta1.ReplicaSetInterface, name string, meta map[string]string) (interfaces.ResourceStatus, error) {
-	rs, err := r.Get(name)
-	if err != nil {
-		return interfaces.ResourceError, err
-	}
+func replicaSetStatus(rs *extbeta1.ReplicaSet, meta map[string]string) (interfaces.ResourceStatus, error) {
 
 	successFactor, err := getPercentage(SuccessFactorKey, meta)
 	if err != nil {
@@ -111,7 +108,22 @@ func (r ReplicaSet) Delete() error {
 
 // Status returns ReplicaSet status based on provided meta.
 func (r ReplicaSet) Status(meta map[string]string) (interfaces.ResourceStatus, error) {
-	return replicaSetStatus(r.Client, r.ReplicaSet.Name, meta)
+	rs, err := r.Client.Get(r.ReplicaSet.Name)
+	if err != nil {
+		return interfaces.ResourceError, err
+	}
+
+	if !r.EqualToDefinition(rs) {
+		return interfaces.ResourceWaitingForUpgrade, fmt.Errorf(string(interfaces.ResourceWaitingForUpgrade))
+	}
+	return replicaSetStatus(rs, meta)
+}
+
+// EqualToDefinition checks if definition in object is compatible with provided object
+func (r ReplicaSet) EqualToDefinition(replicaSetiface interface{}) bool {
+	replicaSet := replicaSetiface.(*extbeta1.ReplicaSet)
+
+	return reflect.DeepEqual(replicaSet.ObjectMeta, r.ReplicaSet.ObjectMeta) && reflect.DeepEqual(replicaSet.Spec, r.ReplicaSet.Spec)
 }
 
 // NameMatches gets resource definition and a name and checks if
@@ -122,7 +134,7 @@ func (r ReplicaSet) NameMatches(def client.ResourceDefinition, name string) bool
 
 // New returns new ReplicaSet based on resource definition
 func (r ReplicaSet) New(def client.ResourceDefinition, c client.Interface) interfaces.Resource {
-	return NewReplicaSet(def.ReplicaSet, c.ReplicaSets(), def.Meta)
+	return NewReplicaSet(def, c.ReplicaSets())
 }
 
 // NewExisting returns new ExistingReplicaSet based on resource definition
@@ -141,8 +153,15 @@ func (r ReplicaSet) StatusIsCacheable(meta map[string]string) bool {
 	return !ok
 }
 
-func NewReplicaSet(replicaSet *extbeta1.ReplicaSet, client v1beta1.ReplicaSetInterface, meta map[string]interface{}) ReplicaSet {
-	return ReplicaSet{Base: Base{meta}, ReplicaSet: replicaSet, Client: client}
+func NewReplicaSet(def client.ResourceDefinition, client v1beta1.ReplicaSetInterface) ReplicaSet {
+	return ReplicaSet{
+		Base: Base{
+			Definition: def,
+			meta:       def.Meta,
+		},
+		ReplicaSet: def.ReplicaSet,
+		Client:     client,
+	}
 }
 
 type ExistingReplicaSet struct {
@@ -161,7 +180,11 @@ func (r ExistingReplicaSet) Create() error {
 
 // Status returns ReplicaSet status based on provided meta.
 func (r ExistingReplicaSet) Status(meta map[string]string) (interfaces.ResourceStatus, error) {
-	return replicaSetStatus(r.Client, r.Name, meta)
+	rs, err := r.Client.Get(r.Name)
+	if err != nil {
+		return interfaces.ResourceError, err
+	}
+	return replicaSetStatus(rs, meta)
 }
 
 // Delete deletes ReplicaSet from the cluster

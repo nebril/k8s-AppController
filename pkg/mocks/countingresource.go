@@ -85,6 +85,11 @@ func (c *CountingResource) StatusIsCacheable(meta map[string]string) bool {
 	return true
 }
 
+// EqualToDefinition returns is false
+func (c *CountingResource) EqualToDefinition(_ interface{}) bool {
+	return false
+}
+
 // NewCountingResource creates new instance of CountingResource
 func NewCountingResource(key string, counter *CounterWithMemo, timeout time.Duration) *CountingResource {
 	return &CountingResource{

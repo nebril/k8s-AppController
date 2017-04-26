@@ -72,6 +72,11 @@ func (c *Resource) StatusIsCacheable(meta map[string]string) bool {
 	return true
 }
 
+// EqualToDefinition returns is false
+func (c *Resource) EqualToDefinition(_ interface{}) bool {
+	return false
+}
+
 // NewResource creates new instance of Resource
 func NewResource(key string, status interfaces.ResourceStatus) *Resource {
 	return NewResourceWithMeta(key, status, nil)
